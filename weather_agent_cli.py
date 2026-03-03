@@ -84,58 +84,106 @@ def execute_curl_command(url):
     except Exception as e:
         return False, f"Error executing curl: {str(e)}"
 
-def generate_weather_api_calls(location):
+def detect_location_region(location):
     """
-    Use Claude to intelligently generate National Weather Service API calls for a given location.
-    This is where the "agentic" magic happens - AI planning the API calls.
+    Use Claude to determine if location is in USA or Australia.
     
     Args:
         location (str): The location provided by the user
     
     Returns:
-        tuple: (success: bool, api_calls: list) - success status and list of API URLs or error message
+        tuple: (success: bool, region: str) - success status and region ('USA' or 'AUSTRALIA')
     """
-    # Create a detailed prompt that teaches Claude how to generate NWS API calls
     prompt = f"""
-You are an expert at working with the National Weather Service (NWS) API.
+Determine if this location is in the United States or Australia: "{location}"
 
-Your task: Generate the NWS API URL to get weather forecast data for "{location}".
+Consider:
+- Australian cities: Sydney, Melbourne, Brisbane, Perth, Adelaide, Canberra, etc.
+- Australian states/territories: NSW, VIC, QLD, WA, SA, TAS, NT, ACT
+- Australian postcodes: 4 digits (e.g., 2000, 3000, 4000)
+- US locations: US cities, states, ZIP codes (5 digits)
 
-Instructions:
-1. First, determine the approximate latitude and longitude coordinates for this location
-2. Generate the NWS Points API URL: https://api.weather.gov/points/{{lat}},{{lon}}
-
-For the coordinates, use your knowledge to estimate:
-- Major cities: Use well-known coordinates
-- ZIP codes: Estimate based on the area
-- States: Use approximate center coordinates
-- In case a location description is provided instead of a location name, please use the most likely city and state name as the location for the coordinates
-
-Example for Seattle:
-https://api.weather.gov/points/47.6062,-122.3321
-
-Example for largest city in USA:
-Based on your knowledge, you will establish location is New York City
-https://api.weather.gov/points/40.7128,-74.0060
-
-Now generate the API call (Points API) for the established location. 
-Return ONLY the complete Points API URL, nothing else.
-Format: https://api.weather.gov/points/LAT,LON
+Return ONLY one word: USA or AUSTRALIA
 """
     
-    print(f"AI is analyzing '{location}' and generating weather API calls...")
+    success, response = call_claude_sonnet(prompt)
+    if success:
+        region = response.strip().upper()
+        if region in ['USA', 'AUSTRALIA']:
+            return True, region
+        return False, "Could not determine region"
+    return False, response
+
+def generate_weather_api_calls(location):
+    """
+    Use Claude to intelligently generate weather API calls for USA or Australia.
+    
+    Args:
+        location (str): The location provided by the user
+    
+    Returns:
+        tuple: (success: bool, data: dict) - success status and dict with 'region' and 'url' or error
+    """
+    print(f"AI is analyzing '{location}'...")
+    
+    # Detect region
+    success, region = detect_location_region(location)
+    if not success:
+        return False, region
+    
+    print(f"Detected region: {region}")
+    
+    if region == 'USA':
+        prompt = f"""
+You are an expert at working with the National Weather Service (NWS) API.
+
+Generate the NWS API URL for "{location}".
+
+Instructions:
+1. Determine the latitude and longitude coordinates
+2. Generate: https://api.weather.gov/points/{{lat}},{{lon}}
+
+Example for Seattle: https://api.weather.gov/points/47.6062,-122.3321
+
+Return ONLY the complete URL, nothing else.
+"""
+    else:  # AUSTRALIA
+        prompt = f"""
+You are an expert at working with Australian weather data.
+
+Generate coordinates for "{location}" in Australia.
+
+Instructions:
+1. Determine the latitude and longitude for this Australian location
+2. Return ONLY in this exact format: LAT,LON
+
+Examples:
+- Sydney: -33.8688,151.2093
+- Melbourne: -37.8136,144.9631
+- Brisbane: -27.4698,153.0251
+
+Return ONLY the coordinates in format: LAT,LON
+"""
+    
     success, response = call_claude_sonnet(prompt)
     
     if success:
-        # Clean up the response - sometimes Claude adds extra text
-        api_url = response.strip()
-        # Make sure we got a valid URL
-        if api_url.startswith('https://api.weather.gov/points/'):
-            return True, [api_url]  # Return as list for consistency
-        else:
-            return False, f"AI generated invalid URL: {api_url}"
-    else:
-        return False, response
+        response = response.strip()
+        if region == 'USA':
+            if response.startswith('https://api.weather.gov/points/'):
+                return True, {'region': 'USA', 'url': response}
+            return False, f"Invalid URL: {response}"
+        else:  # AUSTRALIA
+            try:
+                lat, lon = response.split(',')
+                lat, lon = float(lat.strip()), float(lon.strip())
+                # BOM API uses nearest observation station
+                url = f"http://www.bom.gov.au/fwo/IDN60901/IDN60901.94768.json"
+                return True, {'region': 'AUSTRALIA', 'coords': (lat, lon), 'url': url}
+            except:
+                return False, f"Invalid coordinates: {response}"
+    
+    return False, response
 
 def get_forecast_url_from_points_response(points_json):
     """
@@ -154,22 +202,24 @@ def get_forecast_url_from_points_response(points_json):
     except (json.JSONDecodeError, KeyError) as e:
         return False, f"Error parsing Points API response: {str(e)}"
 
-def process_weather_response(raw_json, location):
+def process_weather_response(raw_json, location, region='USA'):
     """
-    Use Claude to convert raw NWS API JSON into a human-readable weather summary.
-    This is where AI processes complex data into useful information.
+    Use Claude to convert raw weather API JSON into a human-readable summary.
     
     Args:
-        raw_json (str): Raw JSON response from NWS API
+        raw_json (str): Raw JSON response from weather API
         location (str): Original location for context
+        region (str): 'USA' or 'AUSTRALIA'
     
     Returns:
         tuple: (success: bool, summary: str) - success status and processed summary or error message
     """
+    api_source = "National Weather Service" if region == 'USA' else "Bureau of Meteorology"
+    
     prompt = f"""
-You are a weather information specialist. I have raw National Weather Service forecast data for "{location}" that needs to be converted into a clear, helpful summary for a general audience.
+You are a weather information specialist. I have raw {api_source} forecast data for "{location}" that needs to be converted into a clear, helpful summary for a general audience.
 
-Raw NWS API Response:
+Raw API Response:
 {raw_json}
 
 Please create a weather summary that includes:
@@ -194,6 +244,7 @@ def run_weather_agent():
     """
     print("Welcome to the Weather AI Agent!")
     print("This agent uses Claude 4.5 Sonnet to help you get weather forecasts.")
+    print("Supports locations in USA and Australia!")
     print("=" * 60)
     
     while True:
@@ -211,59 +262,83 @@ def run_weather_agent():
         print(f"\n Starting weather analysis for '{location}'...")
         print("-" * 40)
         
-        # Step 1: AI generates the Points API URL
+        # Step 1: AI generates the API URL and detects region
         print("Step 1: AI Planning Phase")
-        success, api_calls = generate_weather_api_calls(location)
+        success, api_data = generate_weather_api_calls(location)
         
         if not success:
-            print(f" Failed to generate API calls: {api_calls}")
+            print(f" Failed to generate API calls: {api_data}")
             continue
+        
+        region = api_data['region']
+        print(f" Region: {region}")
+        
+        if region == 'USA':
+            points_url = api_data['url']
+            print(f" Generated Points API URL: {points_url}")
             
-        points_url = api_calls[0]
-        print(f" Generated Points API URL: {points_url}")
-        
-        # Step 2: Execute the Points API call
-        print("\n Step 2: Points API Execution")
-        print("Fetching location data from National Weather Service...")
-        success, points_response = execute_curl_command(points_url)
-        
-        if not success:
-            print(f" Failed to fetch points data: {points_response}")
-            continue
+            # Step 2: Execute the Points API call
+            print("\n Step 2: Points API Execution")
+            print("Fetching location data from National Weather Service...")
+            success, points_response = execute_curl_command(points_url)
             
-        print(f" Received points data")
-        
-        # Step 3: Extract forecast URL from Points response
-        print("\n Step 3: Extracting Forecast URL")
-        success, forecast_url = get_forecast_url_from_points_response(points_response)
-        
-        if not success:
-            print(f" Failed to extract forecast URL: {forecast_url}")
-            continue
+            if not success:
+                print(f" Failed to fetch points data: {points_response}")
+                continue
+                
+            print(f" Received points data")
             
-        print(f" Forecast URL: {forecast_url[:60]}...")
-        
-        # Step 4: Execute the Forecast API call
-        print("\n Step 4: Forecast API Execution")
-        print("Fetching weather forecast data...")
-        success, forecast_response = execute_curl_command(forecast_url)
-        
-        if not success:
-            print(f" Failed to fetch forecast data: {forecast_response}")
-            continue
+            # Step 3: Extract forecast URL from Points response
+            print("\n Step 3: Extracting Forecast URL")
+            success, forecast_url = get_forecast_url_from_points_response(points_response)
             
-        print(f" Received {len(forecast_response)} characters of forecast data")
+            if not success:
+                print(f" Failed to extract forecast URL: {forecast_url}")
+                continue
+                
+            print(f" Forecast URL: {forecast_url[:60]}...")
+            
+            # Step 4: Execute the Forecast API call
+            print("\n Step 4: Forecast API Execution")
+            print("Fetching weather forecast data...")
+            success, forecast_response = execute_curl_command(forecast_url)
+            
+            if not success:
+                print(f" Failed to fetch forecast data: {forecast_response}")
+                continue
+                
+            print(f" Received {len(forecast_response)} characters of forecast data")
+            
+        else:  # AUSTRALIA
+            # For Australia, use Open-Meteo API (free, no key required)
+            lat, lon = api_data['coords']
+            forecast_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weathercode,windspeed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto"
+            
+            print(f" Generated forecast URL for coordinates: {lat},{lon}")
+            
+            # Step 2: Execute the Forecast API call
+            print("\n Step 2: Forecast API Execution")
+            print("Fetching weather forecast data from Open-Meteo...")
+            success, forecast_response = execute_curl_command(forecast_url)
+            
+            if not success:
+                print(f" Failed to fetch forecast data: {forecast_response}")
+                continue
+                
+            print(f" Received {len(forecast_response)} characters of forecast data")
         
         # Step 5: AI processes the response
-        print("\nStep 5: AI Analysis Phase")
-        success, summary = process_weather_response(forecast_response, location)
+        step_num = 5 if region == 'USA' else 3
+        print(f"\nStep {step_num}: AI Analysis Phase")
+        success, summary = process_weather_response(forecast_response, location, region)
         
         if not success:
             print(f" Failed to process data: {summary}")
             continue
             
         # Step 6: Display results
-        print("\nStep 6: Weather Forecast")
+        step_num = 6 if region == 'USA' else 4
+        print(f"\nStep {step_num}: Weather Forecast")
         print("=" * 60)
         print(summary)
         print("=" * 60)

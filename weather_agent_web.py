@@ -106,47 +106,87 @@ def execute_curl_command(url):
     except Exception as e:
         return False, f"Error executing curl: {str(e)}"
 
-def generate_weather_api_calls(location):
+def detect_location_region(location):
     """
-    Use Claude to generate NWS API calls
+    Use Claude to determine if location is in USA or Australia.
     """
     prompt = f"""
+Determine if this location is in the United States or Australia: "{location}"
+
+Consider:
+- Australian cities: Sydney, Melbourne, Brisbane, Perth, Adelaide, Canberra, etc.
+- Australian states/territories: NSW, VIC, QLD, WA, SA, TAS, NT, ACT
+- Australian postcodes: 4 digits (e.g., 2000, 3000, 4000)
+- US locations: US cities, states, ZIP codes (5 digits)
+
+Return ONLY one word: USA or AUSTRALIA
+"""
+    
+    success, response = call_claude_sonnet(prompt)
+    if success:
+        region = response.strip().upper()
+        if region in ['USA', 'AUSTRALIA']:
+            return True, region
+        return False, "Could not determine region"
+    return False, response
+
+def generate_weather_api_calls(location):
+    """
+    Use Claude to generate weather API calls for USA or Australia.
+    """
+    success, region = detect_location_region(location)
+    if not success:
+        return False, region
+    
+    if region == 'USA':
+        prompt = f"""
 You are an expert at working with the National Weather Service (NWS) API.
 
-Your task: Generate the NWS API URL to get weather forecast data for "{location}".
+Generate the NWS API URL for "{location}".
 
 Instructions:
-1. First, determine the approximate latitude and longitude coordinates for this location
-2. Generate the NWS Points API URL: https://api.weather.gov/points/{{lat}},{{lon}}
+1. Determine the latitude and longitude coordinates
+2. Generate: https://api.weather.gov/points/{{lat}},{{lon}}
 
-For the coordinates, use your knowledge to estimate:
-- Major cities: Use well-known coordinates
-- ZIP codes: Estimate based on the area
-- States: Use approximate center coordinates
-- In case a location description is provided instead of a location name, please use the most likely city and state name as the location for the coordinates
+Example for Seattle: https://api.weather.gov/points/47.6062,-122.3321
 
-Example for Seattle:
-https://api.weather.gov/points/47.6062,-122.3321
+Return ONLY the complete URL, nothing else.
+"""
+    else:  # AUSTRALIA
+        prompt = f"""
+You are an expert at working with Australian weather data.
 
-Example for largest city in USA:
-Based on your knowledge, you will establish location is New York City
-https://api.weather.gov/points/40.7128,-74.0060
+Generate coordinates for "{location}" in Australia.
 
-Now generate the API call (Points API) for the established location. 
-Return ONLY the complete Points API URL, nothing else.
-Format: https://api.weather.gov/points/LAT,LON
+Instructions:
+1. Determine the latitude and longitude for this Australian location
+2. Return ONLY in this exact format: LAT,LON
+
+Examples:
+- Sydney: -33.8688,151.2093
+- Melbourne: -37.8136,144.9631
+- Brisbane: -27.4698,153.0251
+
+Return ONLY the coordinates in format: LAT,LON
 """
     
     success, response = call_claude_sonnet(prompt)
     
     if success:
-        api_url = response.strip()
-        if api_url.startswith('https://api.weather.gov/points/'):
-            return True, [api_url]
-        else:
-            return False, f"AI generated invalid URL: {api_url}"
-    else:
-        return False, response
+        response = response.strip()
+        if region == 'USA':
+            if response.startswith('https://api.weather.gov/points/'):
+                return True, {'region': 'USA', 'url': response}
+            return False, f"Invalid URL: {response}"
+        else:  # AUSTRALIA
+            try:
+                lat, lon = response.split(',')
+                lat, lon = float(lat.strip()), float(lon.strip())
+                return True, {'region': 'AUSTRALIA', 'coords': (lat, lon)}
+            except:
+                return False, f"Invalid coordinates: {response}"
+    
+    return False, response
 
 def get_forecast_url_from_points_response(points_json):
     """
@@ -159,14 +199,16 @@ def get_forecast_url_from_points_response(points_json):
     except (json.JSONDecodeError, KeyError) as e:
         return False, f"Error parsing Points API response: {str(e)}"
 
-def process_weather_response(raw_json, location):
+def process_weather_response(raw_json, location, region='USA'):
     """
-    Use Claude to process NWS API response
+    Use Claude to process weather API response
     """
+    api_source = "National Weather Service" if region == 'USA' else "Open-Meteo"
+    
     prompt = f"""
-You are a weather information specialist. I have raw National Weather Service forecast data for "{location}" that needs to be converted into a clear, helpful summary for a general audience.
+You are a weather information specialist. I have raw {api_source} forecast data for "{location}" that needs to be converted into a clear, helpful summary for a general audience.
 
-Raw NWS API Response:
+Raw API Response:
 {raw_json}
 
 Please create a weather summary that includes:
@@ -189,7 +231,7 @@ This AI agent demonstrates **Agentic AI** principles:
 
 **🧠 Intelligence**: Uses Claude 4.5 Sonnet to understand locations and plan API calls
 
-**🔗 Action**: Automatically calls the National Weather Service API
+**🔗 Action**: Automatically calls weather APIs (NWS for USA, Open-Meteo for Australia)
 
 **📊 Processing**: Converts complex weather data into readable forecasts
 
@@ -212,7 +254,7 @@ st.title("🌤️ Weather AI Agent")
 st.markdown("### Powered by Claude 4.5 Sonnet on Amazon Bedrock")
 
 st.markdown("""
-This intelligent agent helps you get weather forecasts using the National Weather Service API. 
+This intelligent agent helps you get weather forecasts for USA and Australia locations. 
 Enter any location below and watch the AI agent work through its reasoning process!
 """)
 
@@ -224,8 +266,8 @@ if 'show_results' not in st.session_state:
 st.markdown("---")
 location = st.text_input(
     "🔍 Enter a location name or description:",
-    placeholder="e.g., Seattle, 90210, New York City, National park near Homestead in Florida",
-    help="You can enter city names, ZIP codes, state names, or location descriptions"
+    placeholder="e.g., Seattle, Sydney, 90210, Melbourne, New York City",
+    help="You can enter city names, ZIP codes, state names, or location descriptions (USA & Australia)"
 )
 
 # Create columns for the buttons
@@ -261,81 +303,112 @@ if st.session_state.show_results and get_forecast:
                 st.markdown('<div class="step-header">🧠 Step 1: AI Planning Phase</div>', unsafe_allow_html=True)
                 
                 with st.spinner("Claude is analyzing the location and planning the API calls..."):
-                    success, api_calls = generate_weather_api_calls(location)
+                    success, api_data = generate_weather_api_calls(location)
                 
                 if success:
-                    points_url = api_calls[0]
-                    st.markdown('<div class="success-box">✅ Points API URL generated successfully!</div>', unsafe_allow_html=True)
-                    st.code(points_url, language="text")
-                else:
-                    st.markdown(f'<div class="error-box">❌ Failed to generate API calls: {api_calls}</div>', unsafe_allow_html=True)
-                    st.stop()
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Step 2: Points API Execution
-            with st.container():
-                st.markdown('<div class="step-container">', unsafe_allow_html=True)
-                st.markdown('<div class="step-header">🔗 Step 2: Points API Execution</div>', unsafe_allow_html=True)
-                
-                with st.spinner("Fetching location data from National Weather Service..."):
-                    success, points_response = execute_curl_command(points_url)
-                
-                if success:
-                    st.markdown('<div class="success-box">✅ Received location data from NWS</div>', unsafe_allow_html=True)
+                    region = api_data['region']
+                    st.markdown(f'<div class="success-box">✅ Detected region: {region}</div>', unsafe_allow_html=True)
                     
-                    # Show a preview of the raw data
-                    with st.expander("🔍 View Raw Points API Response (first 500 characters)"):
-                        st.code(points_response[:500] + "..." if len(points_response) > 500 else points_response, language="json")
+                    if region == 'USA':
+                        points_url = api_data['url']
+                        st.code(points_url, language="text")
+                    else:
+                        lat, lon = api_data['coords']
+                        st.markdown(f"**Coordinates:** {lat}, {lon}")
                 else:
-                    st.markdown(f'<div class="error-box">❌ Failed to fetch points data: {points_response}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="error-box">❌ Failed to generate API calls: {api_data}</div>', unsafe_allow_html=True)
                     st.stop()
                 
                 st.markdown('</div>', unsafe_allow_html=True)
             
-            # Step 3: Extract Forecast URL
-            with st.container():
-                st.markdown('<div class="step-container">', unsafe_allow_html=True)
-                st.markdown('<div class="step-header">📍 Step 3: Extracting Forecast URL</div>', unsafe_allow_html=True)
-                
-                success, forecast_url = get_forecast_url_from_points_response(points_response)
-                
-                if success:
-                    st.markdown('<div class="success-box">✅ Forecast URL extracted successfully!</div>', unsafe_allow_html=True)
-                    st.code(forecast_url, language="text")
-                else:
-                    st.markdown(f'<div class="error-box">❌ Failed to extract forecast URL: {forecast_url}</div>', unsafe_allow_html=True)
-                    st.stop()
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Step 4: Forecast API Execution
-            with st.container():
-                st.markdown('<div class="step-container">', unsafe_allow_html=True)
-                st.markdown('<div class="step-header">🌦️ Step 4: Forecast API Execution</div>', unsafe_allow_html=True)
-                
-                with st.spinner("Fetching weather forecast data..."):
-                    success, forecast_response = execute_curl_command(forecast_url)
-                
-                if success:
-                    st.markdown(f'<div class="success-box">✅ Received {len(forecast_response):,} characters of forecast data</div>', unsafe_allow_html=True)
+            if region == 'USA':
+                # Step 2: Points API Execution
+                with st.container():
+                    st.markdown('<div class="step-container">', unsafe_allow_html=True)
+                    st.markdown('<div class="step-header">🔗 Step 2: Points API Execution</div>', unsafe_allow_html=True)
                     
-                    # Show a preview of the raw data
-                    with st.expander("🔍 View Raw Forecast API Response (first 500 characters)"):
-                        st.code(forecast_response[:500] + "..." if len(forecast_response) > 500 else forecast_response, language="json")
-                else:
-                    st.markdown(f'<div class="error-box">❌ Failed to fetch forecast data: {forecast_response}</div>', unsafe_allow_html=True)
-                    st.stop()
+                    with st.spinner("Fetching location data from National Weather Service..."):
+                        success, points_response = execute_curl_command(points_url)
+                    
+                    if success:
+                        st.markdown('<div class="success-box">✅ Received location data from NWS</div>', unsafe_allow_html=True)
+                        
+                        with st.expander("🔍 View Raw Points API Response (first 500 characters)"):
+                            st.code(points_response[:500] + "..." if len(points_response) > 500 else points_response, language="json")
+                    else:
+                        st.markdown(f'<div class="error-box">❌ Failed to fetch points data: {points_response}</div>', unsafe_allow_html=True)
+                        st.stop()
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
                 
-                st.markdown('</div>', unsafe_allow_html=True)
+                # Step 3: Extract Forecast URL
+                with st.container():
+                    st.markdown('<div class="step-container">', unsafe_allow_html=True)
+                    st.markdown('<div class="step-header">📍 Step 3: Extracting Forecast URL</div>', unsafe_allow_html=True)
+                    
+                    success, forecast_url = get_forecast_url_from_points_response(points_response)
+                    
+                    if success:
+                        st.markdown('<div class="success-box">✅ Forecast URL extracted successfully!</div>', unsafe_allow_html=True)
+                        st.code(forecast_url, language="text")
+                    else:
+                        st.markdown(f'<div class="error-box">❌ Failed to extract forecast URL: {forecast_url}</div>', unsafe_allow_html=True)
+                        st.stop()
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Step 4: Forecast API Execution
+                with st.container():
+                    st.markdown('<div class="step-container">', unsafe_allow_html=True)
+                    st.markdown('<div class="step-header">🌦️ Step 4: Forecast API Execution</div>', unsafe_allow_html=True)
+                    
+                    with st.spinner("Fetching weather forecast data..."):
+                        success, forecast_response = execute_curl_command(forecast_url)
+                    
+                    if success:
+                        st.markdown(f'<div class="success-box">✅ Received {len(forecast_response):,} characters of forecast data</div>', unsafe_allow_html=True)
+                        
+                        with st.expander("🔍 View Raw Forecast API Response (first 500 characters)"):
+                            st.code(forecast_response[:500] + "..." if len(forecast_response) > 500 else forecast_response, language="json")
+                    else:
+                        st.markdown(f'<div class="error-box">❌ Failed to fetch forecast data: {forecast_response}</div>', unsafe_allow_html=True)
+                        st.stop()
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                step_num = 5
+            else:  # AUSTRALIA
+                # Step 2: Forecast API Execution
+                lat, lon = api_data['coords']
+                forecast_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weathercode,windspeed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto"
+                
+                with st.container():
+                    st.markdown('<div class="step-container">', unsafe_allow_html=True)
+                    st.markdown('<div class="step-header">🌦️ Step 2: Forecast API Execution</div>', unsafe_allow_html=True)
+                    
+                    with st.spinner("Fetching weather forecast data from Open-Meteo..."):
+                        success, forecast_response = execute_curl_command(forecast_url)
+                    
+                    if success:
+                        st.markdown(f'<div class="success-box">✅ Received {len(forecast_response):,} characters of forecast data</div>', unsafe_allow_html=True)
+                        
+                        with st.expander("🔍 View Raw Forecast API Response (first 500 characters)"):
+                            st.code(forecast_response[:500] + "..." if len(forecast_response) > 500 else forecast_response, language="json")
+                    else:
+                        st.markdown(f'<div class="error-box">❌ Failed to fetch forecast data: {forecast_response}</div>', unsafe_allow_html=True)
+                        st.stop()
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                step_num = 3
             
-            # Step 5: AI Processing
+            # AI Processing
             with st.container():
                 st.markdown('<div class="step-container">', unsafe_allow_html=True)
-                st.markdown('<div class="step-header">📊 Step 5: AI Analysis Phase</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="step-header">📊 Step {step_num}: AI Analysis Phase</div>', unsafe_allow_html=True)
                 
                 with st.spinner("Claude is processing the weather data and creating a summary..."):
-                    success, summary = process_weather_response(forecast_response, location)
+                    success, summary = process_weather_response(forecast_response, location, region)
                 
                 if success:
                     st.markdown('<div class="success-box">✅ Weather analysis complete!</div>', unsafe_allow_html=True)
@@ -345,7 +418,7 @@ if st.session_state.show_results and get_forecast:
                 
                 st.markdown('</div>', unsafe_allow_html=True)
             
-            # Step 6: Results
+            # Results
             st.markdown("---")
             st.markdown("## 🌤️ Weather Forecast")
             st.markdown(summary)
@@ -391,16 +464,20 @@ This application demonstrates **Agentic AI** principles using:
 """)
 
 # Add some example queries
-st.markdown("### 💡 Try These Examples:")
 st.markdown("""
-**Suggested locations to test:**
-- **Seattle** - Major city (tests city name recognition)
-- **90210** - ZIP code (tests postal code handling)  
-- **New York City** - Multi-word city (tests complex location parsing)
-- **Miami, FL** - City with state (tests state abbreviations)
-- **Chicago** - Another major city (tests different coordinates)
-- **National park near Homestead in Florida** - Location description (tests AI reasoning)
-- **Largest City in California** - Descriptive query (tests knowledge-based location finding)
+### 💡 Try These Examples:
+
+**USA Locations:**
+- **Seattle** - Major city
+- **90210** - ZIP code
+- **New York City** - Multi-word city
+- **Miami, FL** - City with state
+
+**Australian Locations:**
+- **Sydney** - Major city
+- **Melbourne** - Victoria's capital
+- **Brisbane** - Queensland's capital
+- **Perth** - Western Australia
 
 Simply copy any of these into the location input above and click "Get Weather Forecast"!
 """)

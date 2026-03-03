@@ -1,44 +1,31 @@
 # 🌤️ Weather AI Agent
 
-An intelligent weather forecasting agent powered by Claude 4.5 Sonnet on Amazon Bedrock. This project demonstrates agentic AI principles by combining AI reasoning with real-world API interactions to deliver weather forecasts.
+A weather agent that uses Claude on Amazon Bedrock to fetch and explain weather forecasts. Works with locations in the USA and Australia.
 
-## 🎯 What is Agentic AI?
+## What This Does
 
-This project showcases **Agentic AI** - AI systems that can:
-- **🧠 Reason**: Understand user intent and plan actions
-- **🔗 Act**: Execute real-world tasks (API calls)
-- **📊 Process**: Transform raw data into useful insights
-- **🔄 Adapt**: Handle various input formats and edge cases
+Give it a location, and it'll:
+1. Figure out if you're asking about a US or Australian location
+2. Call the right weather API
+3. Turn the raw data into something actually readable
 
-## ✨ Features
+The interesting part is watching Claude plan and execute the API calls on its own - that's the "agentic" bit.
 
-- **Intelligent Location Parsing**: Handles city names, ZIP codes, state names, and descriptive queries
-- **Multi-Step Reasoning**: AI plans and executes a sequence of API calls
-- **Real-Time Weather Data**: Fetches live data from the National Weather Service API
-- **Natural Language Summaries**: Converts complex JSON responses into readable forecasts
-- **Two Interfaces**: CLI for quick queries, Web UI for interactive exploration
+## Features
 
-## 🏗️ Architecture
+- Handles city names, ZIP codes, postcodes, whatever
+- Works with USA (National Weather Service) and Australia (Open-Meteo)
+- Two ways to use it: command line or web interface
+- Shows you each step as it happens
 
-```
-User Input → AI Planning → Points API → Forecast API → AI Processing → Results
-```
-
-1. **User Input**: Location name or description
-2. **AI Planning**: Claude generates appropriate API calls
-3. **Points API**: Fetch weather office coordinates
-4. **Forecast API**: Get detailed weather data
-5. **AI Processing**: Convert raw data to summary
-6. **Display Results**: Present forecast to user
-
-## 📋 Prerequisites
+## Prerequisites
 
 - Python 3.8+
 - AWS account with Bedrock access
 - AWS credentials configured
 - Access to Claude 4.5 Sonnet model in Amazon Bedrock
 
-## 🚀 Installation
+## Installation
 
 1. Clone this repository:
 ```bash
@@ -56,11 +43,9 @@ pip install -r requirements.txt
 aws configure
 ```
 
-Ensure your AWS credentials have permissions for:
-- `bedrock:InvokeModel`
-- Access to Claude 4.5 Sonnet model in `us-west-2` region
+Make sure your credentials have `bedrock:InvokeModel` permissions and access to Claude 4.5 Sonnet in `us-west-2`.
 
-## 💻 Usage
+## Usage
 
 ### CLI Version
 
@@ -85,99 +70,63 @@ streamlit run weather_agent_web.py
 
 Then open your browser to `http://localhost:8501`
 
-## 🧪 Example Queries
+## Example Queries
 
-Try these location formats:
+**USA:**
+- City names: `Seattle`, `New York City`, `Miami, FL`
+- ZIP codes: `90210`, `10001`
+- Descriptive: `Largest city in California`
 
-- **City names**: `Seattle`, `New York City`, `Miami, FL`
-- **ZIP codes**: `90210`, `10001`
-- **Descriptive queries**: `Largest city in California`, `National park near Homestead in Florida`
+**Australia:**
+- City names: `Sydney`, `Melbourne`, `Brisbane`, `Perth`
+- States: `NSW`, `Victoria`, `Queensland`
+- Postcodes: `2000`, `3000`, `4000`
 
-## 📁 Project Structure
+## How It Works
 
-```
-.
-├── weather_agent_cli.py      # Command-line interface
-├── weather_agent_web.py      # Streamlit web interface
-├── requirements.txt          # Python dependencies
-└── README.md                # This file
-```
+**For USA locations:**
+1. Claude detects it's a US location
+2. Generates coordinates and calls NWS Points API
+3. Extracts forecast URL from response
+4. Fetches detailed forecast data
+5. Claude converts JSON to readable summary
 
-## 🔧 How It Works
+**For Australian locations:**
+1. Claude detects it's an Australian location
+2. Generates coordinates for the location
+3. Calls Open-Meteo API with coordinates
+4. Claude converts JSON to readable summary
 
-### 1. AI Planning Phase
-Claude analyzes the location input and generates the appropriate National Weather Service API URL with coordinates.
+## Technical Stack
 
-### 2. Points API Call
-Fetches weather office information for the coordinates:
-```
-https://api.weather.gov/points/{lat},{lon}
-```
+- **Amazon Bedrock** - Hosts Claude 4.5 Sonnet
+- **National Weather Service API** - Free US weather data
+- **Open-Meteo API** - Free Australian weather data
+- **Streamlit** - Web interface
+- **boto3** - AWS SDK for Python
 
-### 3. Forecast API Call
-Retrieves detailed forecast data from the weather office endpoint.
+## Important Notes
 
-### 4. AI Processing Phase
-Claude converts raw JSON weather data into a natural language summary with:
-- Current conditions
-- Multi-day forecast
-- Temperature ranges
-- Precipitation chances
-- Notable weather patterns
-
-## 🛠️ Technical Details
-
-### AWS Services Used
-- **Amazon Bedrock**: AI model hosting and inference
-- **Claude 4.5 Sonnet**: Language model for reasoning and processing
-
-### External APIs
-- **National Weather Service API**: Free, public weather data (no API key required)
-
-### Key Technologies
-- **boto3**: AWS SDK for Python
-- **Streamlit**: Web interface framework
-- **subprocess**: System command execution for API calls
-
-## ⚠️ Important Notes
-
-- This project uses the National Weather Service API for educational purposes
-- For critical weather decisions, consult official weather sources
-- API rate limits apply to the NWS API
+- This uses public weather APIs for educational purposes
+- For critical weather decisions, use official sources
 - AWS Bedrock usage incurs costs based on token consumption
-
-## 🔐 Security Considerations
-
 - Never commit AWS credentials to version control
-- Use IAM roles with least-privilege permissions
-- Consider using AWS Secrets Manager for production deployments
-- Validate and sanitize all user inputs
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Areas for improvement:
-- Add support for international weather APIs
-- Implement caching to reduce API calls
-- Add weather alerts and warnings
-- Support for hourly forecasts
-- Add unit tests
+Ideas for improvements:
+- Add caching to reduce API calls
+- Support for weather alerts
+- Hourly forecasts
+- More countries
 
-## 📄 License
+## Acknowledgments
 
-This project is provided as-is for educational purposes.
-
-## 🙏 Acknowledgments
-
-- National Weather Service for providing free weather data
-- Anthropic for Claude AI capabilities
-- AWS for Bedrock infrastructure
-
-## 📞 Support
-
-For issues or questions:
-- Check the NWS API documentation: https://www.weather.gov/documentation/services-web-api
-- Review AWS Bedrock documentation: https://docs.aws.amazon.com/bedrock/
+- National Weather Service for free US weather data
+- Open-Meteo for free Australian weather data
+- Anthropic for Claude
+- AWS for Bedrock
 
 ---
 
-**Built with ❤️ using Claude 4.5 Sonnet on Amazon Bedrock**
+**Built with Claude 4.5 Sonnet on Amazon Bedrock**
